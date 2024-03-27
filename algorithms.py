@@ -14,18 +14,53 @@ debug_mode = True
 
 
 class DynamicDataTypeImitation():
-    def __init__(self) -> None:
+    def __init__(self, bits_per_variable: int = 4) -> None:
         self.rounding_set = None
-        self.bits_per_variable = 4
-        self.rounding_set_lengtn = 2**(self.bits_per_variable-1)
-        pass
+        self.bits_per_variable = bits_per_variable
+        self.rounding_set_lengtn = 2**(self.bits_per_variable - 1)
+        self.shift_max_val = self.rounding_set_lengtn // 10
+        self.shift_min_val = self.rounding_set_lengtn // 10
+
+    def set_shift_max_val(self, new_shift: int):
+        self.shift_max_val = new_shift
+
+    def set_shift_min_val(self, new_shift: int):
+        self.shift_min_val = new_shift
+
+    def _set_update_condition(self, compressed_data: ndarray) -> bool:
+        if(self.rounding_set is None):
+            return True
+        min_value = jnp.min(jnp.abs(compressed_data))
+        argmin_index = jnp.argmin(jnp.abs(self.rounding_set - min_value))
+        if (argmin_index < self.shift_min_val):
+            return True
+        if(argmin_index > self.rounding_set_lengtn - self.shift_min_val):
+            print("something in DDT not ok")
+            return True
+        return False
 
     def _update_rounding_set(self, compressed_data: ndarray) -> None:
-        pass #update self.rounding_set
+        if(self._set_update_condition(compressed_data)):
+            max_value = jnp.max(jnp.abs(compressed_data))
+            max_degree = jnp.ceil(jnp.log2(max_value)) + self.shift_max_val
+            rounding_set_degrees = jnp.flip(
+                jnp.cumsum(-jnp.ones(self.rounding_set_lengtn)) + 1) + max_degree
+            self.rounding_set = 2**rounding_set_degrees
 
-    def dynamic_data_type(self, data: ndarray) -> ndarray:
-        pass #conversion to dynamic data type
+    def dynamic_data_type(self, compressed_data: ndarray) -> ndarray:
+        if(debug_mode):
+            assert(self.rounding_set is not None), "rounding set is not initialize"
+            assert(jnp.max(self.rounding_set) !=
+                   0), "maximum of rounding set == 0"
+        matr_rounding_set, matr_data = jnp.broadcast_arrays(
+            self.rounding_set, jnp.reshape(
+                jnp.abs(compressed_data), [
+                    len(compressed_data), 1]))
+        return jnp.sign(compressed_data) * \
+            self.rounding_set[jnp.argmin(matr_rounding_set - matr_data, axis=1)]
 
+    def clear_infos(self):
+        self.rounding_set = None
 
 ######################################################################
 
@@ -38,20 +73,24 @@ class AlgoLoggerParams():
     master_x_applied_func: list[Callable[[ndarray], ndarray]] = None
     logging_rate: float = 0
 
+
 class AlgoLogger():
     def __init__(self,
-                params: AlgoLoggerParams,
-                file_name: str,
-                ) -> None:
+                 params: AlgoLoggerParams,
+                 file_name: str,
+                 ) -> None:
         self.params = params
         self.file_name = file_name
         # use vars(class object instance)
-        #как-то дернуть ифну про окружение из под которого запускается, инфу про сам алгоритм и его параметры, что мы хотим собирать
+        # как-то дернуть ифну про окружение из под которого запускается, инфу
+        # про сам алгоритм и его параметры, что мы хотим собирать
         pass
+
     def node_logger(self):
         if(self.params.is_logging_node_val):
             pass
         pass
+
     def master_logger(self):
         if(self.params.is_logging_master_val):
             pass
@@ -75,6 +114,7 @@ class Node():
     def compute(self) -> ndarray:
         self.step(self)
 
+
 class Master():
     def __init__(
             self,
@@ -88,6 +128,7 @@ class Master():
 
     def compute(self) -> None:
         self.step(self)
+
 
 class IAlgorithm(abc.ABC):
     def __init__(
@@ -132,12 +173,14 @@ class IAlgorithm(abc.ABC):
         for _ in tqdm(range(self.iteration_number)):
             self._alg_step()
 
+
 class EF21Node(Node):
     def __init__(self, node_step: Callable[..., None], func_in_node: Callable[[
                  ndarray], ndarray], compressor: Callable[[ndarray], ndarray], x: ndarray) -> None:
         super().__init__(node_step, func_in_node, compressor, x)
         self.c = 0
         self.g = 0
+
 
 class EF21Master(Master):
     def __init__(self,
@@ -148,6 +191,7 @@ class EF21Master(Master):
         super().__init__(nodes_quantity, master_step, x)
         self.learning_rate = None
         self.g = 0
+
 
 class EF21(IAlgorithm):
     def __init__(self,
@@ -203,7 +247,7 @@ class EF21(IAlgorithm):
         def init_nodes() -> list:
             if (debug_mode):
                 assert self.nodes_quantity == len(
-                    self.node_func), "nodes_quantity != len(node_func))"
+                    self.node_func), "nodes_quantity != len(node_func)"
             return [
                 EF21Node(
                     self._node_step,
@@ -213,21 +257,6 @@ class EF21(IAlgorithm):
                     self.nodes_quantity)]
 
         self.master.nodes_list = init_nodes()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 '''
