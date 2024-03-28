@@ -14,7 +14,7 @@ debug_mode = True
 
 
 class DynamicDataTypeImitation():
-    def __init__(self, bits_per_variable: int = 4) -> None:
+    def __init__(self, bits_per_variable: int = 8) -> None:
         self.rounding_set = None
         self.bits_per_variable = bits_per_variable
         self.rounding_set_lengtn = 2**(self.bits_per_variable - 1)
