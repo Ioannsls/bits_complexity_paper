@@ -5,8 +5,9 @@ from jax.numpy import ndarray
 from tqdm import tqdm
 from dataclasses import dataclass
 import abc
-from typing import Any, Callable
-
+from typing import Callable
+import problems
+import compressors
 
 debug_mode = True
 
@@ -68,19 +69,21 @@ class DynamicDataTypeImitation():
 @dataclass
 class AlgoLoggerParams():
     is_logging_node_val: bool = False
-    is_logging_master_val: bool = False
-    node_x_applied_func: list[Callable[[ndarray], ndarray]] = None
-    master_x_applied_func: list[Callable[[ndarray], ndarray]] = None
-    logging_rate: float = 0
+    is_logging_master_val: bool = True
+    node_info_applied_func: list[Callable[[ndarray], ndarray]] = None
+    master_info_applied_func: list[Callable[[ndarray], ndarray]] = None
+    logging_rate: float = 1
 
 
 class AlgoLogger():
+    
     def __init__(self,
                  params: AlgoLoggerParams,
                  file_name: str,
-                 ) -> None:
+                 algo_class_object) -> None:
         self.params = params
         self.file_name = file_name
+        self.algo_class_object = algo_class_object
         # use vars(class object instance)
         # как-то дернуть ифну про окружение из под которого запускается, инфу
         # про сам алгоритм и его параметры, что мы хотим собирать
@@ -133,19 +136,21 @@ class Master():
 class IAlgorithm(abc.ABC):
     def __init__(
             self,
-            starting_point: ndarray,
+            problem_class_object: type[problems.IProblem],
             learning_rate: float,
             iteration_number: int,
-            compressor_func: Callable[[ndarray], ndarray],
-            nodes_quantity: int,
-            node_func: list[Callable[[ndarray], ndarray]]) -> None:
+            compressor_class_object: type[compressors.ICompressor],
+            nodes_quantity: int) -> None:
         super().__init__()
-        self.startion_point = starting_point
+        self.problem_class_object = problem_class_object
+        self.startion_point = self.problem_class_object.get_start_point()
         self.learning_rate = learning_rate
         self.iteration_number = iteration_number
-        self.comressor_func = compressor_func
+        self.comressor_class_object = compressor_class_object
+        self.comressor_func = compressor_class_object.get_compressor_func()
         self.nodes_quantity = nodes_quantity
-        self.node_func = node_func
+        self.node_func = self.problem_class_object.get_func_list(
+            nodes_quantity)
 
     @abc.abstractmethod
     def _node_step(node) -> None:
@@ -195,21 +200,17 @@ class EF21Master(Master):
 
 class EF21(IAlgorithm):
     def __init__(self,
-                 starting_point: jax.Array,
+                 problem_class_object: type[problems.IProblem],
                  learning_rate: float,
                  iteration_number: int,
-                 compressor_func: Callable[...,
-                                           Any],
-                 nodes_quantity: int,
-                 node_func: list[Callable[...,
-                                          Any]]) -> None:
+                 compressor_class_object: type[compressors.ICompressor],
+                 nodes_quantity: int) -> None:
         super().__init__(
-            starting_point,
+            problem_class_object,
             learning_rate,
             iteration_number,
-            compressor_func,
-            nodes_quantity,
-            node_func)
+            compressor_class_object,
+            nodes_quantity)
 
     def _node_step(self, node: EF21Node):
         node.c = node.compressor(node.grad_func(node.x) - node.g)
