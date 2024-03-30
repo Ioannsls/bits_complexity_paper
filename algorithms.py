@@ -76,7 +76,7 @@ class AlgoLoggerParams():
 
 
 class AlgoLogger():
-    
+
     def __init__(self,
                  params: AlgoLoggerParams,
                  file_name: str,
