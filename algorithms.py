@@ -139,7 +139,6 @@ class AlgoLogger():
             adding_str = name + ' = ' + str(algo_dict[name])
             alg_info.append(adding_str)
         self.info_about_alg = alg_info
-        self.csv_logger.info(alg_info)
 
     def _new_log_set(self):
         if(self.params.is_logging_master_val):
