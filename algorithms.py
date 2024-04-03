@@ -1,6 +1,7 @@
 import jax
 import jax.numpy as jnp
 from jax.numpy import ndarray
+from numpy import random
 from tqdm import tqdm
 from dataclasses import dataclass
 import abc
@@ -386,3 +387,141 @@ class EF21(IAlgorithm):
                 node_g.append(node.g)
             return jnp.mean(jnp.array(node_g))
         #self.master.g = master_g(self.master.nodes_list)
+
+
+class MarinaNode(Node):
+    def __init__(self,
+                 node_step: Callable[...,
+                                     None],
+                 func_in_node: Callable[[ndarray],
+                                        ndarray],
+                 compressor: Callable[[ndarray],
+                                      ndarray],
+                 x: ndarray,
+                 learnting_rate: float) -> None:
+        super().__init__(node_step, func_in_node, compressor, x)
+        self.learning_rate = learnting_rate
+        self.g_difference = 0
+        self.prev_x = 0
+        self.g = 0
+        self.c = 0
+
+
+class MarinaMaster(Master):
+    def __init__(self,
+                 nodes_quantity: int,
+                 master_step: Callable[...,
+                                       None],
+                 x: ndarray) -> None:
+        super().__init__(nodes_quantity, master_step, x)
+        self.probability = 0
+        self.c = 0
+        self.g = 0
+
+
+class Marina(IAlgorithm):
+    def __init__(
+            self,
+            problem_class_object: problems.IProblem,
+            learning_rate: float,
+            iteration_number: int,
+            compressor_class_object: compressors.ICompressor,
+            nodes_quantity: int,
+            DDT: DynamicDataTypeImitation = None,
+            logger: AlgoLogger = None,
+            probability=0.01) -> None:
+        super().__init__(
+            problem_class_object,
+            learning_rate,
+            iteration_number,
+            compressor_class_object,
+            nodes_quantity,
+            DDT,
+            logger)
+        self.probability = probability
+
+    def _node_step(self, node: MarinaNode):
+        node.prev_x = node.x
+        node.x -= node.learning_rate * node.g
+        if (node.c == 1):
+            node.g = node.grad_func(node.x)
+        else:
+            if(self.ddt_is_init):
+                node.g_difference = node.compressor(
+                    node.grad_func(node.x) - node.grad_func(node.prev_x))
+                node.g += self.ddt.dynamic_data_type(node.g_difference)
+            else:
+                node.g += node.compressor(node.grad_func(node.x) -
+                                          node.grad_func(node.prev_x))
+        if(self.logger_is_inti):
+            self.logger.add_node_log(node.g_difference)
+
+    def _master_step(self, master: MarinaMaster):
+        def send_grad_to_nodes(nodes_list: list[MarinaNode]) -> None:
+            for node in nodes_list:
+                node.g = master.g
+                node.c = master.c
+
+        def all_node_compute(nodes_list: list[MarinaNode]):
+            for node in nodes_list:
+                node.compute()
+
+        def collect_grad_from_nodes(nodes_list: list[MarinaNode]):
+            if(self.logger_is_inti):
+                if(self.ddt_is_init):
+                    self.logger.add_bits_complexity_log(
+                        self.nodes_quantity * self.ddt.bits_per_variable)
+                else:
+                    self.logger.add_bits_complexity_log(
+                        self.nodes_quantity * 32)
+            return jnp.mean(jnp.array([node.g for node in nodes_list]), axis=0)
+
+        def collect_x_from_nodes(nodes_list: list[MarinaNode]):
+            node_index = random.choice(jnp.arange(0, self.nodes_quantity), 1)
+            return nodes_list[node_index[0]].x
+
+        def collect_g_diff_from_nodes(nodes_list: list[MarinaNode]):
+            return jnp.mean(
+                jnp.array([node.g_difference for node in nodes_list]), axis=0)
+
+        master.c = random.choice(
+            [1, 0], p=[master.probability, 1 - master.probability])
+        send_grad_to_nodes(master.nodes_list)
+        all_node_compute(master.nodes_list)
+        master.x = collect_x_from_nodes(master.nodes_list)
+        master.g = collect_grad_from_nodes(master.nodes_list)
+        if(self.ddt_is_init):
+            self.ddt.check_update_rounding_set(
+                collect_g_diff_from_nodes(master.nodes_list))
+        if(self.logger_is_inti):
+            self.logger.add_master_log(master.g)
+
+    def _alg_step(self):
+        self.master.compute()
+        if(self.logger_is_inti):
+            self.logger.log_info()
+
+    def _init_set_param_master(self) -> None:
+        self.master = MarinaMaster(
+            self.nodes_quantity,
+            self._master_step,
+            self.startion_point)
+        start_grad = jax.grad(self.node_func[0], 0)
+        self.master.g = start_grad(self.startion_point)
+        self.master.probability = self.probability
+
+    def _init_set_param_nodes(self) -> None:
+        def init_nodes() -> list:
+            if (debug_mode):
+                assert self.nodes_quantity == len(
+                    self.node_func), "nodes_quantity != len(node_func))"
+            return [
+                MarinaNode(
+                    self._node_step,
+                    self.node_func[i],
+                    self.comressor_func,
+                    self.startion_point,
+                    self.learning_rate) for i in range(
+                    self.nodes_quantity)]
+
+        self.master.nodes_list = init_nodes()
