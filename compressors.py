@@ -1,4 +1,5 @@
 import jax.numpy as jnp
+import numpy as np
 from jax.numpy import ndarray
 import abc
 from typing import Callable
@@ -28,6 +29,18 @@ class Topk(ICompressor):
         result = result.at[sorted_indices[:self.k]].set(
             x[sorted_indices[:self.k]])
         return result
+    
+class RandK(ICompressor):
+    def __init__(self, k: int) -> None:
+        super().__init__()
+        self.k = k
+
+    def compressor_function(self, x) -> ndarray:
+        choice_indexes = np.random.choice(jnp.arange(len(x)), self.k, replace= False)
+        results = np.zeros(len(x))
+        results[choice_indexes] = x[choice_indexes]
+        return jnp.array(results)
+        
 
 
 class UnbiasedExp(ICompressor):  # TODO rewrite in vector operation
