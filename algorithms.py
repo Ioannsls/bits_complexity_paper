@@ -1,7 +1,7 @@
 import jax
 import jax.numpy as jnp
-from jax.numpy import ndarray
 from numpy import random
+from jax.numpy import ndarray
 from tqdm import tqdm
 from dataclasses import dataclass
 import abc
@@ -20,9 +20,10 @@ class DynamicDataTypeImitation():
     def __init__(self, bits_per_variable: int = 8) -> None:
         self.rounding_set = None
         self.bits_per_variable = bits_per_variable
-        self.rounding_set_lengtn = 2**(self.bits_per_variable - 1)
+        self.rounding_set_length = 2**(self.bits_per_variable - 1)
         self.max_val_shift_on_create = 0
-        self.max_val_shift_on_conditions = 1 + self.rounding_set_lengtn // 5
+        self.max_val_shift_on_conditions = 1 + self.rounding_set_length // 5
+        self.is_ddt_constant = False
 
     def set_shift_on_create(self, new_shift: int):
         self.max_val_shift_on_create = new_shift
@@ -30,26 +31,98 @@ class DynamicDataTypeImitation():
     def set_shift_on_conditions(self, new_shift: int):
         self.max_val_shift_on_conditions = new_shift
 
+    def set_constant_rounding_set(self, rounding_set: ndarray):
+        assert len(
+            rounding_set) == self.rounding_set_length, "rounding set miss length"
+        self.is_ddt_constant = True
+        self.rounding_set = rounding_set
+
     def _set_update_condition(self, compressed_data: ndarray) -> bool:
         if(self.rounding_set is None):
             return True
         max_value = jnp.max(jnp.abs(compressed_data))
         argmax_index = jnp.argmin(jnp.abs(self.rounding_set - max_value))
-        if (argmax_index + 1 < self.rounding_set_lengtn -
+        if (argmax_index + 1 < self.rounding_set_length -
                 self.max_val_shift_on_conditions):
             return True
         return False
 
     def check_update_rounding_set(self, compressed_data: ndarray) -> None:
-        if(self._set_update_condition(compressed_data)):
+        if(self._set_update_condition(compressed_data) and self.is_ddt_constant == False):
             max_value = jnp.max(jnp.abs(compressed_data))
             max_degree = jnp.ceil(jnp.log2(max_value)) + \
                 self.max_val_shift_on_create
             rounding_set_degrees = jnp.flip(
-                jnp.cumsum(-jnp.ones(self.rounding_set_lengtn)) + 1) + max_degree
+                jnp.cumsum(-jnp.ones(self.rounding_set_length)) + 1) + max_degree
             self.rounding_set = 2**rounding_set_degrees
 
     def dynamic_data_type(self, compressed_data: ndarray) -> ndarray:
+        if(self.rounding_set is None):
+            return compressed_data
+        if(debug_mode):
+            assert(self.rounding_set is not None), "rounding set is not initialize"
+            assert(jnp.max(self.rounding_set) !=
+                   0), "maximum of rounding set == 0"
+        matr_rounding_set, matr_data = jnp.broadcast_arrays(
+            self.rounding_set, jnp.reshape(
+                jnp.abs(compressed_data), [
+                    len(compressed_data), 1]))
+        return jnp.sign(compressed_data) * self.rounding_set[jnp.argmin(
+            jnp.abs(matr_rounding_set - matr_data), axis=1)]
+
+    def clear_info(self):
+        self.rounding_set = None
+
+
+class DynamicDataTypePersentile():
+    supported_names = {'log', 'exp', 'lin'}
+
+    def __init__(self, bits_per_variable: int = 8, space_name='log') -> None:
+        self.space_name = space_name
+        self.rounding_set = None
+        self.bits_per_variable = bits_per_variable
+        self.rounding_set_length = 2**(self.bits_per_variable - 1)
+        self.max_val_shift_on_conditions = 1 + self.rounding_set_length // 5
+        self.is_ddt_constant = False
+
+        def set_percentiles() -> ndarray:
+            if(debug_mode):
+                assert self.space_name in self.supported_names, "space name is not supported"
+            if(self.space_name == 'log'):
+                return jnp.logspace(0, 2, self.rounding_set_length)
+            elif(self.space_name == 'exp'):
+                return jnp.linspace(1, 10, self.rounding_set_length)**2
+            elif(self.space_name == 'lin'):
+                return jnp.linspace(1, 100, self.rounding_set_length)
+        self.percentile_set = set_percentiles()
+
+    def set_shift_on_conditions(self, new_shift: int):
+        self.max_val_shift_on_conditions = new_shift
+
+    def set_constant_rounding_set(self, rounding_set: ndarray):
+        assert len(
+            rounding_set) == self.rounding_set_length, "rounding set miss length"
+        self.is_ddt_constant = True
+        self.rounding_set = rounding_set
+
+    def _set_update_condition(self, compressed_data: ndarray) -> bool:
+        if(self.rounding_set is None):
+            return True
+        max_value = jnp.max(jnp.abs(compressed_data))
+        argmax_index = jnp.argmin(jnp.abs(self.rounding_set - max_value))
+        if (argmax_index + 1 < self.rounding_set_length -
+                self.max_val_shift_on_conditions):
+            return True
+        return False
+
+    def check_update_rounding_set(self, compressed_data: ndarray) -> None:
+        if(self._set_update_condition(compressed_data) and self.is_ddt_constant == False):
+            self.rounding_set = jnp.percentile(
+                jnp.abs(compressed_data), self.percentile_set)
+
+    def dynamic_data_type(self, compressed_data: ndarray) -> ndarray:
+        if(self.rounding_set is None):
+            return compressed_data
         if(debug_mode):
             assert(self.rounding_set is not None), "rounding set is not initialize"
             assert(jnp.max(self.rounding_set) !=
@@ -272,10 +345,10 @@ class IAlgorithm(abc.ABC):
         self._init_set_param_nodes()
         if(self.logger_is_inti):
             self.logger.set_info_about_alg(self)
-        if(self.ddt_is_init):
-            self.ddt.check_update_rounding_set(self.startion_point + 1)
         for _ in tqdm(range(self.iteration_number)):
             self._alg_step()
+
+# EF21
 
 
 class EF21Node(Node):
@@ -283,7 +356,7 @@ class EF21Node(Node):
                  ndarray], ndarray], compressor: Callable[[ndarray], ndarray], x: ndarray) -> None:
         super().__init__(node_step, func_in_node, compressor, x)
         self.c = 0
-        self.g = 0  # self.compressor(self.grad_func(self.x))
+        self.g = compressor(self.grad_func(self.x))  # node start gradient init
 
 
 class EF21Master(Master):
@@ -370,7 +443,7 @@ class EF21(IAlgorithm):
         def init_nodes() -> list:
             if (debug_mode):
                 assert self.nodes_quantity == len(
-                    self.node_func), "nodes_quantity != len(node_func)"
+                    self.node_func), "nodes_quantity != len(node_func))"
             return [
                 EF21Node(
                     self._node_step,
@@ -378,15 +451,11 @@ class EF21(IAlgorithm):
                     self.comressor_func,
                     self.startion_point) for i in range(
                     self.nodes_quantity)]
-
         self.master.nodes_list = init_nodes()
+        self.master.g = jnp.mean(jnp.array(
+            [node.g for node in self.master.nodes_list]), axis=0)  # masters gradient init
 
-        def master_g(node_list: list[EF21Node]):
-            node_g = []
-            for node in node_list:
-                node_g.append(node.g)
-            return jnp.mean(jnp.array(node_g))
-        #self.master.g = master_g(self.master.nodes_list)
+# MARINA
 
 
 class MarinaNode(Node):
@@ -469,11 +538,19 @@ class Marina(IAlgorithm):
         def collect_grad_from_nodes(nodes_list: list[MarinaNode]):
             if(self.logger_is_inti):
                 if(self.ddt_is_init):
-                    self.logger.add_bits_complexity_log(
-                        self.nodes_quantity * self.ddt.bits_per_variable)
+                    if(master.c == 0):
+                        self.logger.add_bits_complexity_log(
+                            self.nodes_quantity * self.ddt.bits_per_variable)
+                    else:
+                        self.logger.add_bits_complexity_log(
+                            self.nodes_quantity * self.ddt.bits_per_variable * 10)
                 else:
-                    self.logger.add_bits_complexity_log(
-                        self.nodes_quantity * 32)
+                    if(master.c == 0):
+                        self.logger.add_bits_complexity_log(
+                            self.nodes_quantity * 32)
+                    else:
+                        self.logger.add_bits_complexity_log(
+                            self.nodes_quantity * 32 * 10)
             return jnp.mean(jnp.array([node.g for node in nodes_list]), axis=0)
 
         def collect_x_from_nodes(nodes_list: list[MarinaNode]):
@@ -494,7 +571,7 @@ class Marina(IAlgorithm):
             self.ddt.check_update_rounding_set(
                 collect_g_diff_from_nodes(master.nodes_list))
         if(self.logger_is_inti):
-            self.logger.add_master_log(master.g)
+            self.logger.add_master_log(master.x)
 
     def _alg_step(self):
         self.master.compute()
@@ -524,4 +601,136 @@ class Marina(IAlgorithm):
                     self.learning_rate) for i in range(
                     self.nodes_quantity)]
 
+        self.master.nodes_list = init_nodes()
+
+# DIANA
+
+
+class DianaNode(Node):
+    def __init__(self,
+                 node_step: Callable[..., None],
+                 func_in_node: Callable[[
+                     ndarray], ndarray],
+                 compressor: Callable[[ndarray], ndarray],
+                 x: ndarray,
+                 start_rate: float) -> None:
+        super().__init__(node_step,
+                         func_in_node,
+                         compressor,
+                         x)
+        self.local_grad = 0
+        self.local_shifted_grad = 0
+        self.local_shift = self.grad_func(x)
+        self.rate = start_rate
+
+
+class DianaMaster(Master):
+    def __init__(self,
+                 nodes_quantity: int,
+                 master_step: Callable[...,
+                                       None],
+                 x: ndarray) -> None:
+        super().__init__(nodes_quantity, master_step, x)
+        self.learning_rate = None
+
+
+class Diana(IAlgorithm):
+    def __init__(self,
+                 problem_class_object: problems.IProblem,
+                 learning_rate: float,
+                 iteration_number: int,
+                 compressor_class_object: compressors.ICompressor,
+                 nodes_quantity: int,
+                 diana_learning_rates: float,
+                 master_rates,
+                 DDT: DynamicDataTypeImitation = None,
+                 logger: AlgoLogger = None) -> None:
+
+        super().__init__(
+            problem_class_object,
+            learning_rate,
+            iteration_number,
+            compressor_class_object,
+            nodes_quantity,
+            DDT,
+            logger)
+
+        # \nu_k \forall i \in range(it_num)
+        self.diana_learning_rates = diana_learning_rates
+        self.master_rate = master_rates  # \alpha_k \forall i \in range(it_num)
+
+    def _node_step(self, node: DianaNode):
+        g = node.grad_func(node.x)
+        node.local_shifted_grad = node.compressor(g - node.local_shift)
+        if(self.ddt_is_init):
+            node.local_shifted_grad = self.ddt.dynamic_data_type(
+                node.local_shifted_grad)
+        if(self.logger_is_inti):
+            self.logger.add_node_log(node.local_shifted_grad)
+        node.local_shift += node.rate * node.local_shifted_grad
+
+    def _master_step(self, master: DianaMaster):
+        def send_info_to_nodes(nodes_list: list[DianaNode]) -> None:
+            for node in nodes_list:
+                node.x = master.x
+                node.rate = master.rates[0]
+
+        def all_node_compute(nodes_list: list[DianaNode]):
+            for node in nodes_list:
+                node.compute()
+
+        def collect_local_shifted_grad_from_nodes(nodes_list: list[DianaNode]):
+            if(self.logger_is_inti):
+                if(self.ddt_is_init):
+                    self.logger.add_bits_complexity_log(
+                        self.nodes_quantity * self.ddt.bits_per_variable)
+                else:
+                    self.logger.add_bits_complexity_log(
+                        self.nodes_quantity * 32)
+            return jnp.mean(jnp.array(
+                [node.local_shifted_grad for node in nodes_list]), axis=0)
+
+        current_node_rate = master.rates[0]
+        current_learning_rate = master.learning_rate[0]
+        all_node_compute(master.nodes_list)
+        collected_local_shifted_grad_from_nodes = collect_local_shifted_grad_from_nodes(
+            master.nodes_list)
+        master.g = master.h + collected_local_shifted_grad_from_nodes
+        master.x -= current_learning_rate * master.g
+        master.h += current_node_rate * (master.g - master.h)
+        send_info_to_nodes(master.nodes_list)
+        if(self.ddt_is_init):
+            self.ddt.check_update_rounding_set(
+                collected_local_shifted_grad_from_nodes)
+        if(self.logger_is_inti):
+            self.logger.add_master_log(master.x)
+
+    def _alg_step(self):
+        self.master.compute()
+        if(self.logger_is_inti):
+            self.logger.log_info()
+
+    def _init_set_param_master(self) -> None:
+        self.master = DianaMaster(
+            self.nodes_quantity,
+            self._master_step,
+            self.startion_point)
+        start_grad = jax.grad(self.node_func[0], 0)
+        self.master.learning_rate = self.diana_learning_rates
+        self.master.rates = self.master_rate
+        self.master.h = start_grad(self.startion_point)
+
+    def _init_set_param_nodes(self) -> None:
+        def init_nodes() -> list:
+            if (debug_mode):
+                assert self.nodes_quantity == len(
+                    self.node_func), "nodes_quantity != len(node_func))"
+            return [
+                DianaNode(
+                    self._node_step,
+                    self.node_func[i],
+                    self.comressor_func,
+                    self.startion_point,
+                    self.master.rates[0]) for i in range(
+                    self.nodes_quantity)]
         self.master.nodes_list = init_nodes()
