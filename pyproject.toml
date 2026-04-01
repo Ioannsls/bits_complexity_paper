@@ -1,0 +1,60 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bits-complexity-small-datasets"
+version = "0.1.0"
+description = "Small-datasets experiments for communication-aware compression methods."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.9"
+dependencies = [
+  "numpy>=1.24",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering",
+]
+
+[project.urls]
+Homepage = "https://github.com/Ioannsls/bits_complexity_paper"
+Repository = "https://github.com/Ioannsls/bits_complexity_paper"
+Issues = "https://github.com/Ioannsls/bits_complexity_paper/issues"
+
+[dependency-groups]
+dev = [
+  "coverage[toml]>=7.0",
+  "matplotlib>=3.7",
+  "ruff>=0.6",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "B"]
+ignore = ["B008"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*.py" = ["E402", "E501"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.coverage.run]
+branch = true
+source = ["src/bits_complexity"]
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
+skip_covered = false

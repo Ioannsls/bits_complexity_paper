@@ -1,0 +1,9 @@
+include README.md
+include LICENSE
+include pyproject.toml
+recursive-include src/bits_complexity *.py
+include docs/README_small_datasets.md
+prune tests
+prune runs
+prune datasets
+global-exclude __pycache__ *.py[cod] .DS_Store
